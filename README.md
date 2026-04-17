@@ -77,6 +77,20 @@ Model + config default to the files sitting next to `main.py`, so no flags neede
 python main.py --camera 1 --detect-every 8
 ```
 
+For higher quality input (useful for iPhone virtual cameras on Mac), request a larger capture size:
+
+```bash
+python main.py --camera-backend opencv --camera 0 --camera-width 1920 --camera-height 1080
+```
+
+If you want a larger on-screen preview window too:
+
+```bash
+python main.py --camera-backend opencv --camera 0 \
+  --camera-width 1920 --camera-height 1080 \
+  --preview-width 1280 --preview-height 720
+```
+
 **On your development Mac** (from the repo root — uses `app/` as a package):
 
 ```bash
@@ -100,6 +114,7 @@ python -m app.main
 ## Tuning for Pi 4 performance
 
 - `--detect-every 5` (default): run detection on every 5th frame. Increase to 8–10 if the UI feels sluggish.
+- `--camera-width`/`--camera-height` control capture resolution. Keep `640x480` on Pi for speed, and use `1280x720` or `1920x1080` on desktop for better quality.
 - The detector default is `yolo-v9-t-384-license-plate-end2end` (the small/fast model). Edit `app/pipeline.py` to use a larger model if you need better recall at the cost of FPS.
 - Expected: ~3–6 FPS end-to-end on a Pi 4 8GB with a USB webcam at 640x480.
 

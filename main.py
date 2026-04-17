@@ -39,6 +39,14 @@ def parse_args():
     ap.add_argument("--camera-backend", choices=["auto", "opencv", "picamera2"], default="auto",
                     help="auto: try picamera2 first on Pi, else OpenCV. "
                          "picamera2: Pi CSI/libcamera. opencv: USB webcam or V4L2 device.")
+    ap.add_argument("--camera-width", type=int, default=640,
+                    help="Requested camera capture width (e.g., 1280 or 1920).")
+    ap.add_argument("--camera-height", type=int, default=480,
+                    help="Requested camera capture height (e.g., 720 or 1080).")
+    ap.add_argument("--preview-width", type=int, default=PREVIEW_W,
+                    help="UI preview width in pixels.")
+    ap.add_argument("--preview-height", type=int, default=PREVIEW_H,
+                    help="UI preview height in pixels.")
     ap.add_argument("--detect-every", type=int, default=5,
                     help="Run detection every N frames to keep UI smooth on Pi.")
     ap.add_argument("--min-det-conf", type=float, default=0.35)
@@ -69,9 +77,10 @@ def _is_blank_frame(frame) -> bool:
 
 class OpenCVCameraWorker(_BaseCameraWorker):
     """USB webcam / V4L2 capture via OpenCV."""
-    def __init__(self, camera_index: int):
+    def __init__(self, camera_index: int, size: tuple[int, int] = (640, 480)):
         super().__init__()
         self.camera_index = camera_index
+        self.size = size
 
     def _open_capture(self):
         # On Raspberry Pi OS, forcing V4L2 avoids some blank-frame cases
@@ -86,10 +95,15 @@ class OpenCVCameraWorker(_BaseCameraWorker):
             if not cap.isOpened():
                 cap.release()
                 continue
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.size[0])
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.size[1])
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-            print(f"[camera] OpenCV backend={name}, index={self.camera_index}")
+            actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            print(
+                f"[camera] OpenCV backend={name}, index={self.camera_index}, "
+                f"requested={self.size[0]}x{self.size[1]}, got={actual_w}x{actual_h}"
+            )
             return cap
         return None
 
@@ -148,19 +162,19 @@ class Picamera2CameraWorker(_BaseCameraWorker):
             picam2.close()
 
 
-def build_camera_worker(backend: str, camera_index: int) -> _BaseCameraWorker:
+def build_camera_worker(backend: str, camera_index: int, size: tuple[int, int]) -> _BaseCameraWorker:
     if backend == "opencv":
-        return OpenCVCameraWorker(camera_index)
+        return OpenCVCameraWorker(camera_index, size=size)
     if backend == "picamera2":
-        return Picamera2CameraWorker(camera_num=camera_index)
+        return Picamera2CameraWorker(camera_num=camera_index, size=size)
     # auto: prefer picamera2 if it imports (we're on a Pi with the CSI stack)
     try:
         import picamera2  # noqa: F401
         print("[camera] auto-selected picamera2 backend.")
-        return Picamera2CameraWorker(camera_num=camera_index)
+        return Picamera2CameraWorker(camera_num=camera_index, size=size)
     except ImportError:
         print("[camera] auto-selected OpenCV backend.")
-        return OpenCVCameraWorker(camera_index)
+        return OpenCVCameraWorker(camera_index, size=size)
 
 
 class App:
@@ -170,6 +184,8 @@ class App:
         pipeline: PlatePipeline,
         camera_index: int,
         camera_backend: str,
+        camera_size: tuple[int, int],
+        preview_size: tuple[int, int],
         detect_every: int,
     ):
         self.root = root
@@ -177,6 +193,8 @@ class App:
         self.detect_every = detect_every
         self.requested_camera_backend = camera_backend
         self.requested_camera_index = camera_index
+        self.camera_size = camera_size
+        self.preview_w, self.preview_h = preview_size
 
         self.root.title("Cambodia Plate OCR")
         self.root.configure(bg="#1e1e1e")
@@ -184,7 +202,7 @@ class App:
         top = Frame(root, bg="#1e1e1e")
         top.pack(side=TOP, fill=BOTH, expand=True)
 
-        self.video_label = Label(top, bg="#000000", width=PREVIEW_W, height=PREVIEW_H)
+        self.video_label = Label(top, bg="#000000", width=self.preview_w, height=self.preview_h)
         self.video_label.pack(side=LEFT, padx=8, pady=8)
 
         right = Frame(top, bg="#1e1e1e")
@@ -220,7 +238,7 @@ class App:
 
         self.camera_backend = camera_backend
         self.camera_index = camera_index
-        self.camera = build_camera_worker(camera_backend, camera_index)
+        self.camera = build_camera_worker(camera_backend, camera_index, self.camera_size)
         self.camera.start()
         self.root.protocol("WM_DELETE_WINDOW", self.shutdown)
         self.root.after(30, self.tick)
@@ -231,7 +249,7 @@ class App:
             self.camera.join(timeout=0.8)
         self.camera_backend = backend
         self.camera_index = camera_index
-        self.camera = build_camera_worker(backend, camera_index)
+        self.camera = build_camera_worker(backend, camera_index, self.camera_size)
         print(f"[camera] retry with backend={backend}, index={camera_index}")
         self.camera.start()
 
@@ -337,7 +355,7 @@ class App:
     def _render(self, bgr, results) -> None:
         annotated = PlatePipeline.draw(bgr, results)
         h, w = annotated.shape[:2]
-        scale = min(PREVIEW_W / w, PREVIEW_H / h)
+        scale = min(self.preview_w / w, self.preview_h / h)
         new_size = (int(w * scale), int(h * scale))
         annotated = cv2.resize(annotated, new_size, interpolation=cv2.INTER_AREA)
         rgb = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
@@ -382,7 +400,15 @@ def main() -> int:
     )
 
     root = Tk()
-    App(root, pipeline, args.camera, args.camera_backend, args.detect_every)
+    App(
+        root,
+        pipeline,
+        args.camera,
+        args.camera_backend,
+        (args.camera_width, args.camera_height),
+        (args.preview_width, args.preview_height),
+        args.detect_every,
+    )
     root.mainloop()
     return 0
 
