@@ -1,0 +1,8 @@
+# Runtime-only deps for the Raspberry Pi 4 app. No training libs needed.
+fast-plate-ocr>=0.4.0
+open-image-models>=0.2.0
+onnxruntime>=1.17
+opencv-python>=4.8
+Pillow>=10.0
+PyYAML>=6.0
+numpy>=1.26,<2.3

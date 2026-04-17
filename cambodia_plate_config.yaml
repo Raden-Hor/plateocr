@@ -1,0 +1,36 @@
+# Plate config for Cambodian license plates (Latin + digits only).
+#
+# Cambodian plates show both the Khmer province name AND the Latin/English version,
+# so we only OCR the Latin characters. Alphabet is identical to the pretrained
+# cct-s-v2-global-model, which means ALL weights transfer during fine-tuning
+# (including the character-classification head) — expect fast convergence.
+
+# Matches the pretrained model. Longest plate_text in your CSV must fit in this.
+max_plate_slots: 10
+
+# 0-9, A-Z, pad. No duplicates. Do not change unless you also retrain the output head.
+alphabet: "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_"
+
+# Pad char for plates shorter than max_plate_slots. Must be in alphabet.
+pad_char: "_"
+
+# Must match the pretrained model: 64x128 RGB. Don't change unless retraining from scratch.
+img_height: 64
+img_width: 128
+keep_aspect_ratio: false
+interpolation: linear
+image_color_mode: rgb
+
+# Full 67-region list from the pretrained cct-s-v2-global-model. Keeping this
+# intact means the pretrained region head weights load in full (no shape
+# mismatch), so the model retains prior knowledge of non-Cambodian plates.
+# Your CSVs only need "Cambodia" (or whatever subset you have).
+plate_regions: ['Albania', 'Andorra', 'Argentina', 'Armenia', 'Australia', 'Austria', 'Azerbaijan', 'Bahrain',
+                'Belarus', 'Belgium', 'Bosnia and Herzegovina', 'Brazil', 'Bulgaria', 'Cambodia', 'Canada', 'Croatia',
+                'Cyprus', 'Czech Republic', 'Denmark', 'Estonia', 'Finland', 'France', 'Georgia', 'Germany',
+                'Gibraltar', 'Greece', 'Guernsey', 'Hungary', 'Iceland', 'Indonesia', 'Ireland', 'Israel', 'Italy',
+                'Latvia', 'Liechtenstein', 'Lithuania', 'Luxembourg', 'Malaysia', 'Malta', 'Mexico', 'Moldova',
+                'Monaco', 'Montenegro', 'Netherlands', 'New Zealand', 'North Macedonia', 'Norway', 'Poland',
+                'Portugal', 'Qatar', 'Romania', 'San Marino', 'Serbia', 'Singapore', 'Slovakia', 'Slovenia', 'Spain',
+                'Sweden', 'Switzerland', 'Thailand', 'Turkey', 'United States', 'Ukraine', 'United Kingdom', 'Vietnam',
+                'Unknown']
