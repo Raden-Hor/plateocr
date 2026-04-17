@@ -121,6 +121,7 @@ Then `sudo systemctl enable --now plate-ocr`.
   `python main.py --camera-backend picamera2 --camera 0`
   and install `picamera2` system package:
   `sudo apt install -y python3-picamera2`
+  The app now auto-retries `picamera2` and OpenCV indexes when no frames arrive.
 - **`ImportError: libGL.so.1`** — install `libgl1`: `sudo apt install -y libgl1`.
 - **OCR prints garbage text** — your `best.onnx` or `cambodia_plate_config.yaml` doesn't match. Re-copy both from the training machine together (they're a pair).
 - **`ModuleNotFoundError: No module named '_tkinter'`** — Tk isn't installed for your Python. On the Pi/Ubuntu: `sudo apt install -y python3-tk`. On macOS + Homebrew Python 3.11: `brew install python-tk@3.11`.

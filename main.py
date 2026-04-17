@@ -49,7 +49,7 @@ class _BaseCameraWorker(threading.Thread):
     def __init__(self):
         super().__init__(daemon=True)
         self.frame_q: Queue = Queue(maxsize=1)
-        self._stop = threading.Event()
+        self._stop_event = threading.Event()
 
     def _push(self, frame) -> None:
         if self.frame_q.full():
@@ -60,7 +60,11 @@ class _BaseCameraWorker(threading.Thread):
         self.frame_q.put(frame)
 
     def stop(self) -> None:
-        self._stop.set()
+        self._stop_event.set()
+
+
+def _is_blank_frame(frame) -> bool:
+    return frame is None or frame.size == 0 or not frame.any()
 
 
 class OpenCVCameraWorker(_BaseCameraWorker):
@@ -94,10 +98,12 @@ class OpenCVCameraWorker(_BaseCameraWorker):
         if cap is None:
             print(f"[camera] OpenCV could not open index {self.camera_index}")
             return
-        while not self._stop.is_set():
+        while not self._stop_event.is_set():
             ok, frame = cap.read()
             if not ok:
                 time.sleep(0.05)
+                continue
+            if _is_blank_frame(frame):
                 continue
             self._push(frame)
         cap.release()
@@ -130,9 +136,12 @@ class Picamera2CameraWorker(_BaseCameraWorker):
         config = picam2.create_video_configuration(main={"size": self.size, "format": "RGB888"})
         picam2.configure(config)
         picam2.start()
+        time.sleep(0.2)  # allow camera controls (AE/AWB) to settle
         try:
-            while not self._stop.is_set():
+            while not self._stop_event.is_set():
                 frame = picam2.capture_array()  # HxWx3 BGR
+                if _is_blank_frame(frame):
+                    continue
                 self._push(frame)
         finally:
             picam2.stop()
@@ -166,6 +175,8 @@ class App:
         self.root = root
         self.pipeline = pipeline
         self.detect_every = detect_every
+        self.requested_camera_backend = camera_backend
+        self.requested_camera_index = camera_index
 
         self.root.title("Cambodia Plate OCR")
         self.root.configure(bg="#1e1e1e")
@@ -202,14 +213,65 @@ class App:
         self.paused = False
         self.frame_count = 0
         self.no_frame_count = 0
+        self.recovery_candidates: list[tuple[str, int]] = []
         self.last_results: list[PlateResult] = []
         self.mode = "live"  # or "still"
         self.still_image = None
 
+        self.camera_backend = camera_backend
+        self.camera_index = camera_index
         self.camera = build_camera_worker(camera_backend, camera_index)
         self.camera.start()
         self.root.protocol("WM_DELETE_WINDOW", self.shutdown)
         self.root.after(30, self.tick)
+
+    def _restart_camera(self, backend: str, camera_index: int) -> None:
+        self.camera.stop()
+        if self.camera.is_alive():
+            self.camera.join(timeout=0.8)
+        self.camera_backend = backend
+        self.camera_index = camera_index
+        self.camera = build_camera_worker(backend, camera_index)
+        print(f"[camera] retry with backend={backend}, index={camera_index}")
+        self.camera.start()
+
+    def _build_recovery_candidates(self) -> list[tuple[str, int]]:
+        raw = []
+        if self.requested_camera_backend != "opencv":
+            raw.extend([
+                ("picamera2", self.requested_camera_index),
+                ("picamera2", 0),
+                ("picamera2", 1),
+            ])
+        raw.extend([
+            ("opencv", self.requested_camera_index),
+            ("opencv", 0),
+            ("opencv", 1),
+            ("opencv", 2),
+        ])
+
+        current = (self.camera_backend, self.camera_index)
+        seen = set()
+        out = []
+        for cand in raw:
+            if cand == current or cand in seen:
+                continue
+            seen.add(cand)
+            out.append(cand)
+        return out
+
+    def _try_recover_camera(self) -> bool:
+        if not self.recovery_candidates:
+            self.recovery_candidates = self._build_recovery_candidates()
+        if not self.recovery_candidates:
+            return False
+        backend, camera_index = self.recovery_candidates.pop(0)
+        self.info_var.set(
+            f"No frames from camera. Retrying {backend} backend (index {camera_index})…"
+        )
+        self._restart_camera(backend, camera_index)
+        self.no_frame_count = 0
+        return True
 
     def toggle_pause(self) -> None:
         # From a still upload, resume = return to live camera.
@@ -251,11 +313,12 @@ class App:
             frame = self.camera.frame_q.get_nowait()
         except Empty:
             self.no_frame_count += 1
-            if self.no_frame_count == 100:
-                self.info_var.set(
-                    "No camera frames yet. If this is a Pi Camera, try "
-                    "--camera-backend picamera2 and install python3-picamera2."
-                )
+            if self.no_frame_count in (100, 200, 300, 400):
+                if not self._try_recover_camera():
+                    self.info_var.set(
+                        "Camera opened but no frames. On Pi, install python3-picamera2 and run "
+                        "--camera-backend picamera2 --camera 0."
+                    )
             self.root.after(20, self.tick)
             return
         self.no_frame_count = 0
@@ -300,6 +363,8 @@ class App:
 
     def shutdown(self) -> None:
         self.camera.stop()
+        if self.camera.is_alive():
+            self.camera.join(timeout=0.8)
         self.root.after(100, self.root.destroy)
 
 
