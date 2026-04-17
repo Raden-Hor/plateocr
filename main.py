@@ -35,44 +35,105 @@ def parse_args():
                     default=APP_DIR / "best.onnx")
     ap.add_argument("--plate-config", type=Path,
                     default=APP_DIR / "cambodia_plate_config.yaml")
-    ap.add_argument("--camera", type=int, default=0, help="OpenCV camera index.")
+    ap.add_argument("--camera", type=int, default=0, help="Camera index (OpenCV index, or picamera2 camera num).")
+    ap.add_argument("--camera-backend", choices=["auto", "opencv", "picamera2"], default="auto",
+                    help="auto: try picamera2 first on Pi, else OpenCV. "
+                         "picamera2: Pi CSI/libcamera. opencv: USB webcam or V4L2 device.")
     ap.add_argument("--detect-every", type=int, default=5,
                     help="Run detection every N frames to keep UI smooth on Pi.")
     ap.add_argument("--min-det-conf", type=float, default=0.35)
     return ap.parse_args()
 
 
-class CameraWorker(threading.Thread):
-    """Captures frames in a background thread so the UI stays responsive."""
-    def __init__(self, camera_index: int):
+class _BaseCameraWorker(threading.Thread):
+    def __init__(self):
         super().__init__(daemon=True)
-        self.camera_index = camera_index
         self.frame_q: Queue = Queue(maxsize=1)
         self._stop = threading.Event()
-        self.cap: cv2.VideoCapture | None = None
 
-    def run(self) -> None:
-        self.cap = cv2.VideoCapture(self.camera_index)
-        if not self.cap.isOpened():
-            print(f"[camera] could not open index {self.camera_index}")
-            return
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-        while not self._stop.is_set():
-            ok, frame = self.cap.read()
-            if not ok:
-                time.sleep(0.05)
-                continue
-            if self.frame_q.full():
-                try:
-                    self.frame_q.get_nowait()
-                except Empty:
-                    pass
-            self.frame_q.put(frame)
-        self.cap.release()
+    def _push(self, frame) -> None:
+        if self.frame_q.full():
+            try:
+                self.frame_q.get_nowait()
+            except Empty:
+                pass
+        self.frame_q.put(frame)
 
     def stop(self) -> None:
         self._stop.set()
+
+
+class OpenCVCameraWorker(_BaseCameraWorker):
+    """USB webcam / V4L2 capture via OpenCV."""
+    def __init__(self, camera_index: int):
+        super().__init__()
+        self.camera_index = camera_index
+
+    def run(self) -> None:
+        cap = cv2.VideoCapture(self.camera_index)
+        if not cap.isOpened():
+            print(f"[camera] OpenCV could not open index {self.camera_index}")
+            return
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        while not self._stop.is_set():
+            ok, frame = cap.read()
+            if not ok:
+                time.sleep(0.05)
+                continue
+            self._push(frame)
+        cap.release()
+
+
+class Picamera2CameraWorker(_BaseCameraWorker):
+    """Raspberry Pi CSI camera via libcamera / picamera2. Produces BGR frames."""
+    def __init__(self, camera_num: int = 0, size: tuple[int, int] = (640, 480)):
+        super().__init__()
+        self.camera_num = camera_num
+        self.size = size
+
+    def run(self) -> None:
+        try:
+            from picamera2 import Picamera2  # system pkg on Pi: python3-picamera2
+        except ImportError as e:
+            print(f"[camera] picamera2 not importable: {e}\n"
+                  "        Install: sudo apt install -y python3-picamera2\n"
+                  "        Then recreate the venv with --system-site-packages.")
+            return
+
+        try:
+            picam2 = Picamera2(camera_num=self.camera_num)
+        except Exception as e:  # noqa: BLE001
+            print(f"[camera] Picamera2 open failed: {e}")
+            return
+
+        # 'RGB888' in picamera2 is actually packed BGR in the numpy array —
+        # matches what OpenCV + our pipeline expect.
+        config = picam2.create_video_configuration(main={"size": self.size, "format": "RGB888"})
+        picam2.configure(config)
+        picam2.start()
+        try:
+            while not self._stop.is_set():
+                frame = picam2.capture_array()  # HxWx3 BGR
+                self._push(frame)
+        finally:
+            picam2.stop()
+            picam2.close()
+
+
+def build_camera_worker(backend: str, camera_index: int) -> _BaseCameraWorker:
+    if backend == "opencv":
+        return OpenCVCameraWorker(camera_index)
+    if backend == "picamera2":
+        return Picamera2CameraWorker(camera_num=camera_index)
+    # auto: prefer picamera2 if it imports (we're on a Pi with the CSI stack)
+    try:
+        import picamera2  # noqa: F401
+        print("[camera] auto-selected picamera2 backend.")
+        return Picamera2CameraWorker(camera_num=camera_index)
+    except ImportError:
+        print("[camera] auto-selected OpenCV backend.")
+        return OpenCVCameraWorker(camera_index)
 
 
 class App:
