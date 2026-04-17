@@ -71,6 +71,13 @@ source .venv/bin/activate
 python -m app.main
 ```
 
+> **Homebrew Python 3.11 on macOS** ships without Tk bindings and fails with
+> `ModuleNotFoundError: No module named '_tkinter'`. Install them once:
+> ```bash
+> brew install python-tk@3.11
+> ```
+> No `pip` install needed — it lands in the system Python 3.11 and the venv picks it up automatically.
+
 ## Controls
 
 - **Upload image** — pick a JPG/PNG from disk; plates are annotated on the preview and the text shows on the right panel.
@@ -110,5 +117,5 @@ Then `sudo systemctl enable --now plate-ocr`.
 - **`could not open index 0`** — no camera found. Try `--camera 1`, or check `v4l2-ctl --list-devices`.
 - **`ImportError: libGL.so.1`** — install `libgl1`: `sudo apt install -y libgl1`.
 - **OCR prints garbage text** — your `best.onnx` or `cambodia_plate_config.yaml` doesn't match. Re-copy both from the training machine together (they're a pair).
-- **Tkinter missing** — `sudo apt install -y python3-tk`.
+- **`ModuleNotFoundError: No module named '_tkinter'`** — Tk isn't installed for your Python. On the Pi/Ubuntu: `sudo apt install -y python3-tk`. On macOS + Homebrew Python 3.11: `brew install python-tk@3.11`.
 - **Slow first frame** — onnxruntime warms up on the first inference; expect a 1–2s pause.
