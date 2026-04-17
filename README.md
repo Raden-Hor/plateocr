@@ -31,15 +31,17 @@ You do **not** need `dataset/`, `models/`, `configs/`, `runs/`, `*.keras`, or an
 
 ```bash
 sudo apt update
-sudo apt install -y python3-venv python3-tk libatlas-base-dev libjpeg-dev libopenjp2-7 \
-                    libtiff6 libavcodec-dev libavformat-dev libswscale-dev \
-                    v4l-utils
+sudo apt install -y python3-venv python3-tk python3-opencv python3-picamera2 \
+                    python3-libcamera python3-pil python3-pil.imagetk libcamera-apps \
+                    libatlas-base-dev libjpeg-dev libopenjp2-7 libtiff6 \
+                    libavcodec-dev libavformat-dev libswscale-dev v4l-utils
 
 cd ~/plate-ocr
-python3 -m venv .venv
-source .venv/bin/activate
+python3 -m venv .venv-pi --system-site-packages
+source .venv-pi/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
+python -c "import cv2; from picamera2 import Picamera2; from PIL import ImageTk; print('camera/gui imports OK')"
 ```
 
 ### Camera
@@ -50,14 +52,23 @@ pip install -r requirements.txt
   `python main.py --camera-backend picamera2 --camera 0`
 
 List cameras: `v4l2-ctl --list-devices`.
+Direct camera test: `rpicam-still -n -o test.jpg --width 640 --height 480`.
 
 ## Run
 
 **On the Pi** (from inside `~/plate-ocr/`):
 
 ```bash
-source .venv/bin/activate
+source .venv-pi/bin/activate
 python main.py
+```
+
+If launching from SSH (while the Pi desktop session is already logged in):
+
+```bash
+export DISPLAY=:0
+export XAUTHORITY=/home/$USER/.Xauthority
+python main.py --camera-backend picamera2 --camera 0
 ```
 
 Model + config default to the files sitting next to `main.py`, so no flags needed. To override:
@@ -105,7 +116,7 @@ After=graphical.target
 User=pi
 Environment=DISPLAY=:0
 WorkingDirectory=/home/pi/plate-ocr
-ExecStart=/home/pi/plate-ocr/.venv/bin/python -m app.main
+ExecStart=/home/pi/plate-ocr/.venv-pi/bin/python -m app.main
 Restart=on-failure
 
 [Install]
@@ -122,6 +133,10 @@ Then `sudo systemctl enable --now plate-ocr`.
   and install `picamera2` system package:
   `sudo apt install -y python3-picamera2`
   The app now auto-retries `picamera2` and OpenCV indexes when no frames arrive.
+- **`ModuleNotFoundError: No module named 'picamera2'`** — install `python3-picamera2`, then recreate the Pi venv with `--system-site-packages`.
+- **`ImportError: cannot import name 'ImageTk' from PIL`** — install `python3-pil.imagetk` and `python3-tk`.
+- **`ModuleNotFoundError: No module named 'cv2'`** — install `python3-opencv` and use the Pi venv from this README.
+- **`_tkinter.TclError: no display name and no $DISPLAY environment variable`** — run from local Pi desktop, or export `DISPLAY=:0` and `XAUTHORITY=/home/$USER/.Xauthority` when starting from SSH.
 - **`ImportError: libGL.so.1`** — install `libgl1`: `sudo apt install -y libgl1`.
 - **OCR prints garbage text** — your `best.onnx` or `cambodia_plate_config.yaml` doesn't match. Re-copy both from the training machine together (they're a pair).
 - **`ModuleNotFoundError: No module named '_tkinter'`** — Tk isn't installed for your Python. On the Pi/Ubuntu: `sudo apt install -y python3-tk`. On macOS + Homebrew Python 3.11: `brew install python-tk@3.11`.
