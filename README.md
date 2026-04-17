@@ -46,6 +46,8 @@ pip install -r requirements.txt
 
 - **USB webcam**: works out of the box at `--camera 0`.
 - **Pi Camera Module (libcamera/CSI)**: enable with `sudo raspi-config` → Interface → Camera. On Bookworm, `libcamera` exposes it as a V4L2 device (`/dev/video0`) so OpenCV picks it up via index 0.
+- If preview is black/blank on Pi Camera, force the Pi backend:
+  `python main.py --camera-backend picamera2 --camera 0`
 
 List cameras: `v4l2-ctl --list-devices`.
 
@@ -115,6 +117,10 @@ Then `sudo systemctl enable --now plate-ocr`.
 ## Troubleshooting
 
 - **`could not open index 0`** — no camera found. Try `--camera 1`, or check `v4l2-ctl --list-devices`.
+- **Black/blank live preview on Pi Camera** — run with:
+  `python main.py --camera-backend picamera2 --camera 0`
+  and install `picamera2` system package:
+  `sudo apt install -y python3-picamera2`
 - **`ImportError: libGL.so.1`** — install `libgl1`: `sudo apt install -y libgl1`.
 - **OCR prints garbage text** — your `best.onnx` or `cambodia_plate_config.yaml` doesn't match. Re-copy both from the training machine together (they're a pair).
 - **`ModuleNotFoundError: No module named '_tkinter'`** — Tk isn't installed for your Python. On the Pi/Ubuntu: `sudo apt install -y python3-tk`. On macOS + Homebrew Python 3.11: `brew install python-tk@3.11`.

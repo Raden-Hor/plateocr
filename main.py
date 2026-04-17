@@ -69,13 +69,31 @@ class OpenCVCameraWorker(_BaseCameraWorker):
         super().__init__()
         self.camera_index = camera_index
 
+    def _open_capture(self):
+        # On Raspberry Pi OS, forcing V4L2 avoids some blank-frame cases
+        # seen with OpenCV's generic backend auto-selection.
+        candidates = []
+        if hasattr(cv2, "CAP_V4L2"):
+            candidates.append(("V4L2", cv2.CAP_V4L2))
+        candidates.append(("AUTO", None))
+
+        for name, backend in candidates:
+            cap = cv2.VideoCapture(self.camera_index, backend) if backend is not None else cv2.VideoCapture(self.camera_index)
+            if not cap.isOpened():
+                cap.release()
+                continue
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            print(f"[camera] OpenCV backend={name}, index={self.camera_index}")
+            return cap
+        return None
+
     def run(self) -> None:
-        cap = cv2.VideoCapture(self.camera_index)
-        if not cap.isOpened():
+        cap = self._open_capture()
+        if cap is None:
             print(f"[camera] OpenCV could not open index {self.camera_index}")
             return
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
         while not self._stop.is_set():
             ok, frame = cap.read()
             if not ok:
@@ -137,7 +155,14 @@ def build_camera_worker(backend: str, camera_index: int) -> _BaseCameraWorker:
 
 
 class App:
-    def __init__(self, root: Tk, pipeline: PlatePipeline, camera_index: int, detect_every: int):
+    def __init__(
+        self,
+        root: Tk,
+        pipeline: PlatePipeline,
+        camera_index: int,
+        camera_backend: str,
+        detect_every: int,
+    ):
         self.root = root
         self.pipeline = pipeline
         self.detect_every = detect_every
@@ -176,11 +201,12 @@ class App:
 
         self.paused = False
         self.frame_count = 0
+        self.no_frame_count = 0
         self.last_results: list[PlateResult] = []
         self.mode = "live"  # or "still"
         self.still_image = None
 
-        self.camera = CameraWorker(camera_index)
+        self.camera = build_camera_worker(camera_backend, camera_index)
         self.camera.start()
         self.root.protocol("WM_DELETE_WINDOW", self.shutdown)
         self.root.after(30, self.tick)
@@ -224,8 +250,15 @@ class App:
         try:
             frame = self.camera.frame_q.get_nowait()
         except Empty:
+            self.no_frame_count += 1
+            if self.no_frame_count == 100:
+                self.info_var.set(
+                    "No camera frames yet. If this is a Pi Camera, try "
+                    "--camera-backend picamera2 and install python3-picamera2."
+                )
             self.root.after(20, self.tick)
             return
+        self.no_frame_count = 0
 
         self.frame_count += 1
         if self.frame_count % self.detect_every == 0:
@@ -284,7 +317,7 @@ def main() -> int:
     )
 
     root = Tk()
-    App(root, pipeline, args.camera, args.detect_every)
+    App(root, pipeline, args.camera, args.camera_backend, args.detect_every)
     root.mainloop()
     return 0
 
